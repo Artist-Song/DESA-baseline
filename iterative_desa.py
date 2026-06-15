@@ -30,53 +30,32 @@ from pyvacymaster.pyvacy import optim as pyoptim
 from pyvacymaster.pyvacy import analysis as pyanalysis
 from pyvacymaster.pyvacy import sampling as pysampling
 
-from desa_data import CIFAR10_5X2_CLASS_SPLIT, prepare_data
+from desa_data import prepare_data
 
 
 
-def GetPretrained(path, means, stds, im_size, num_classes, client_num, client_model_names, device, DP=False, ipc = 50, padding = 2, client_class_ids=None):
+def GetPretrained(path, means, stds, im_size, num_classes, client_num, client_model_names, device, DP=False, ipc = 50, padding = 2):
     images_all = []
-    for client_idx in range(client_num):
+    for i in range(client_num):
         if DP:
-            img_path = os.path.join(path, f"client{client_idx}_{client_model_names[client_idx]}_DM_{ipc}_DP_imgs.png")
+            img_path = os.path.join(path, f"client{i}_{client_model_names[i]}_DM_{ipc}_DP_imgs.png")
         else:
-            img_path = os.path.join(path, f'client{client_idx}_{client_model_names[client_idx]}_DM_{ipc}_imgs.png')
+            img_path = os.path.join(path, f'client{i}_{client_model_names[i]}_DM_{ipc}_imgs.png')
         images_pil = Image.open(img_path).convert('RGB')
         transform = transforms.Compose([
                 transforms.ToTensor(),  
-                transforms.Normalize(means[client_idx], stds[client_idx])
+                transforms.Normalize(means[i], stds[i])
                 ])
         images_torch = transform(images_pil)
         images = []
-        anchor_class_ids = client_class_ids[client_idx] if client_class_ids is not None else list(range(num_classes))
-        for j in range(len(anchor_class_ids)):
-            for img_idx in range(ipc):
-                images.append(images_torch[:, (padding+im_size[0])*j+padding:(padding+im_size[0])*j+padding+im_size[0], (padding+im_size[1])*img_idx+padding:(padding+im_size[1])*img_idx+padding+im_size[1]].unsqueeze(0))
+        for j in range(num_classes):
+            for i in range(ipc):
+                images.append(images_torch[:, (padding+im_size[0])*j+padding:(padding+im_size[0])*j+padding+im_size[0], (padding+im_size[1])*i+padding:(padding+im_size[1])*i+padding+im_size[1]].unsqueeze(0))
         images = torch.cat(images, dim=0).detach().to(device)
         # images.requires_grad = True
         images_all.append(images)
             
     return images_all
-
-
-def get_client_anchor_class_ids(args, client_num, num_classes):
-    if args.dataset == 'cifar10-5x2':
-        assert client_num == len(CIFAR10_5X2_CLASS_SPLIT)
-        return CIFAR10_5X2_CLASS_SPLIT
-    return [list(range(num_classes)) for _ in range(client_num)]
-
-
-def build_label_syns(client_class_ids, ipc, device):
-    label_syns = []
-    for class_ids in client_class_ids:
-        labels = torch.tensor(
-            np.array([np.ones(ipc) * class_id for class_id in class_ids]),
-            dtype=torch.long,
-            requires_grad=False,
-            device=device
-        ).view(-1)
-        label_syns.append(labels)
-    return label_syns
 
 def calculate_kd_loss(y_pred_student, y_pred_teacher, y_true, loss_fn, temp=20., distil_weight=0.9):
         """
@@ -514,7 +493,10 @@ if __name__ == '__main__':
             'agent_3_classes_6_7',
             'agent_4_classes_8_9',
         ]
-        client_model_names = ['ConvNet' for _ in datasets]
+        if args.model_hetero:
+            client_model_names = ['ConvNet', 'ConvNetD1', 'ConvNetD2', 'ConvNetD3', 'ConvNetW64']
+        else:
+            client_model_names = [args.model for _ in datasets]
         num_classes, channel = 10, 3
         im_size = (32, 32)
     else:
@@ -522,6 +504,29 @@ if __name__ == '__main__':
     
     train_datasets, test_datasets, train_loaders, test_loaders, concated_test_loader, MEANS, STDS = prepare_data(args, im_size)
     client_num = len(datasets)
+
+    if args.dataset == 'cifar10-5x2':
+        pretrain_paths = [
+            f'{SAVE_PATH}/client{client_idx}_pretrained_{client_model_names[client_idx]}_model.pt'
+            for client_idx in range(client_num)
+        ]
+        image_paths = [
+            os.path.join(SAVE_PATH, f'client{client_idx}_{client_model_names[client_idx]}_DM_{args.ipc}_imgs.png')
+            for client_idx in range(client_num)
+        ]
+        kd_paths = [
+            f'{SAVE_PATH}/client{client_idx}_iterative_kd_{client_model_names[client_idx]}_model.pt'
+            for client_idx in range(client_num)
+        ]
+        if not args.pretrain and not all(os.path.exists(path) for path in pretrain_paths):
+            print('CIFAR10-5x2: missing pretrained local models, enabling --pretrain for this run.')
+            args.pretrain = True
+        if not args.generate_image and not all(os.path.exists(path) for path in image_paths):
+            print('CIFAR10-5x2: missing synthetic anchors, enabling --generate_image for this run.')
+            args.generate_image = True
+        if not args.kd and not all(os.path.exists(path) for path in kd_paths):
+            print('CIFAR10-5x2: missing KD models, enabling --kd for this run.')
+            args.kd = True
 
 
 
@@ -586,17 +591,9 @@ if __name__ == '__main__':
         client_models_pre[i].eval()
     
     '''Train/Load virtual data'''
-    client_anchor_class_ids = get_client_anchor_class_ids(args, client_num, num_classes)
-    image_syns = [
-        torch.randn(
-            size=(len(client_anchor_class_ids[idx]) * args.ipc, channel, im_size[0], im_size[1]),
-            dtype=torch.float,
-            requires_grad=True,
-            device=args.device
-        )
-        for idx in range(client_num)
-    ]
-    label_syns = build_label_syns(client_anchor_class_ids, args.ipc, args.device)
+    label_syns_tmp = torch.tensor(np.array([np.ones(args.ipc)*i for i in range(num_classes)]), dtype=torch.long, requires_grad=False, device=args.device).view(-1) # [0,0,0, 1,1,1, ..., 9,9,9]
+    image_syns = [torch.randn(size=(num_classes*args.ipc, channel, im_size[0], im_size[1]), dtype=torch.float, requires_grad=True, device=args.device) for idx in range(client_num)]
+    label_syns = [copy.deepcopy(label_syns_tmp).to(args.device) for idx in range(client_num)]
     
     
 
@@ -665,19 +662,18 @@ if __name__ == '__main__':
             
             for it in range(inv_iters):
                 loss_avg = 0
-                anchor_class_ids = client_anchor_class_ids[client_idx]
                 if args.DP:
                     # get real images for each class
-                    image_real = [get_images(images_all, indices_class, c, min_image_batch) for c in anchor_class_ids]
-                    loss, image_syns[client_idx] = distribution_matching_DP(image_real, image_syns[client_idx], optimizer_img_dp, channel, len(anchor_class_ids), im_size, args.ipc, minibatch_loader, microbatch_loader)
+                    image_real = [get_images(images_all, indices_class, c, min_image_batch) for c in range(num_classes)]
+                    loss, image_syns[client_idx] = distribution_matching_DP(image_real, image_syns[client_idx], optimizer_img_dp, channel, num_classes, im_size, args.ipc, minibatch_loader, microbatch_loader)
                 else:
                     # get real images for each class
-                    image_real = [get_images(images_all, indices_class, c, image_batch) for c in anchor_class_ids]
+                    image_real = [get_images(images_all, indices_class, c, image_batch) for c in range(num_classes)]
                     # print([image_real[i].size(0) for i in range(len(image_real))])
-                    loss, image_syns[client_idx] = distribution_matching(image_real, image_syns[client_idx], optimizer_img, channel, len(anchor_class_ids), im_size, args.ipc)
+                    loss, image_syns[client_idx] = distribution_matching(image_real, image_syns[client_idx], optimizer_img, channel, num_classes, im_size, args.ipc)
                 # report averaged loss
                 loss_avg += loss
-                loss_avg /= len(anchor_class_ids)
+                loss_avg /= num_classes
                 if it%100 == 0:
                     print('%s Initialization:\t client = %2d, iter = %05d, loss = %.4f' % (get_time(), client_idx, it, loss_avg))
        
@@ -698,7 +694,7 @@ if __name__ == '__main__':
             save_image(image_syn_vis, save_name, nrow=args.ipc)
     else:
         print('Load virtual data...')
-        image_syns = GetPretrained(data_path, MEANS, STDS, im_size, num_classes, client_num, client_model_names, args.device, DP = args.DP, ipc = args.ipc, client_class_ids=client_anchor_class_ids)
+        image_syns = GetPretrained(data_path, MEANS, STDS, im_size, num_classes, client_num, client_model_names, args.device, DP = args.DP, ipc = args.ipc)
 
 
     # ''' Test inverted data  '''
@@ -752,12 +748,8 @@ if __name__ == '__main__':
     # data_mixup_ratio = data_mixup_ratio/data_mixup_ratio.sum(axis=0)
 
     # mixup images
-    if args.dataset == 'cifar10-5x2':
-        mixup_virtual_images = torch.cat(global_virtual_images, dim=0).detach().cpu()
-        mixup_virtual_labels = torch.cat(global_virtual_labels, dim=0).detach().cpu()
-    else:
-        mixup_virtual_images = torch.mean(torch.stack(global_virtual_images), dim=0).detach().cpu()
-        mixup_virtual_labels = global_virtual_labels[0].detach().cpu()
+    mixup_virtual_images = torch.mean(torch.stack(global_virtual_images), dim=0).detach().cpu()
+    mixup_virtual_labels = global_virtual_labels[0].detach().cpu()
     mixup_train_set = TensorDataset(mixup_virtual_images, mixup_virtual_labels)
     shuffled_idx = list(range(0, len(mixup_train_set)))
     random.shuffle(shuffled_idx)
