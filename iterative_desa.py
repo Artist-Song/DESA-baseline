@@ -33,6 +33,14 @@ from pyvacymaster.pyvacy import sampling as pysampling
 from desa_data import prepare_data
 
 
+CIFAR10_5X2_CLASS_SPLIT = [
+    [0, 1],
+    [2, 3],
+    [4, 5],
+    [6, 7],
+    [8, 9],
+]
+
 
 def GetPretrained(path, means, stds, im_size, num_classes, client_num, client_model_names, device, DP=False, ipc = 50, padding = 2):
     images_all = []
@@ -336,6 +344,18 @@ def report_cifar10_5x2_metrics(model_tag, models, test_datasets, concated_test_l
             f'acc_average: {acc_average:.4f}'
         )
     print(f'{model_tag} CIFAR10-5x2 mean acc_average: {np.mean(acc_average_all):.4f}')
+
+
+def build_cifar10_5x2_virtual_data(image_syns, label_syns, ipc):
+    images = []
+    labels = []
+    for client_idx, class_ids in enumerate(CIFAR10_5X2_CLASS_SPLIT):
+        for class_id in class_ids:
+            start = class_id * ipc
+            end = (class_id + 1) * ipc
+            images.append(image_syns[client_idx][start:end])
+            labels.append(label_syns[client_idx][start:end])
+    return torch.cat(images, dim=0).detach().cpu(), torch.cat(labels, dim=0).detach().cpu()
 
 
 
@@ -670,10 +690,11 @@ if __name__ == '__main__':
                     # get real images for each class
                     image_real = [get_images(images_all, indices_class, c, image_batch) for c in range(num_classes)]
                     # print([image_real[i].size(0) for i in range(len(image_real))])
-                    loss, image_syns[client_idx] = distribution_matching(image_real, image_syns[client_idx], optimizer_img, channel, num_classes, im_size, args.ipc)
+                    active_classes = CIFAR10_5X2_CLASS_SPLIT[client_idx] if args.dataset == 'cifar10-5x2' else None
+                    loss, image_syns[client_idx] = distribution_matching(image_real, image_syns[client_idx], optimizer_img, channel, num_classes, im_size, args.ipc, active_classes=active_classes)
                 # report averaged loss
                 loss_avg += loss
-                loss_avg /= num_classes
+                loss_avg /= len(active_classes) if active_classes is not None else num_classes
                 if it%100 == 0:
                     print('%s Initialization:\t client = %2d, iter = %05d, loss = %.4f' % (get_time(), client_idx, it, loss_avg))
        
@@ -748,8 +769,11 @@ if __name__ == '__main__':
     # data_mixup_ratio = data_mixup_ratio/data_mixup_ratio.sum(axis=0)
 
     # mixup images
-    mixup_virtual_images = torch.mean(torch.stack(global_virtual_images), dim=0).detach().cpu()
-    mixup_virtual_labels = global_virtual_labels[0].detach().cpu()
+    if args.dataset == 'cifar10-5x2':
+        mixup_virtual_images, mixup_virtual_labels = build_cifar10_5x2_virtual_data(global_virtual_images, global_virtual_labels, args.ipc)
+    else:
+        mixup_virtual_images = torch.mean(torch.stack(global_virtual_images), dim=0).detach().cpu()
+        mixup_virtual_labels = global_virtual_labels[0].detach().cpu()
     mixup_train_set = TensorDataset(mixup_virtual_images, mixup_virtual_labels)
     shuffled_idx = list(range(0, len(mixup_train_set)))
     random.shuffle(shuffled_idx)

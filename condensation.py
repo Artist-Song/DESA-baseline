@@ -371,7 +371,7 @@ def distribution_matching_DP(image_real, image_syn, optimizer_img, channel, num_
     return loss.item(), image_syn
 
 
-def distribution_matching(image_real, image_syn, optimizer_img, channel, num_classes, im_size, ipc, image_server=None, net=None):
+def distribution_matching(image_real, image_syn, optimizer_img, channel, num_classes, im_size, ipc, image_server=None, net=None, active_classes=None):
 
     lambda_sim = 0.5
 
@@ -392,7 +392,8 @@ def distribution_matching(image_real, image_syn, optimizer_img, channel, num_cla
 
     ''' update synthetic data '''
     loss = torch.tensor(0.0).to(device)
-    for c in range(num_classes):
+    class_iter = range(num_classes) if active_classes is None else active_classes
+    for c in class_iter:
         img_real = image_real[c]
         if img_real.size(0) == 0:
             continue
