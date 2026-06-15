@@ -23,6 +23,11 @@ from loss_fn import Distance_loss
 import pandas as pd
 import torch.nn.functional as F
 from PIL import Image
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    def tqdm(iterable, **kwargs):
+        return iterable
 
 # for DP implementations
 sys.path.append('./privacymaster/pyvacy/optim')
@@ -588,8 +593,8 @@ if __name__ == '__main__':
     classification_loss_fun = nn.CrossEntropyLoss()
     if args.pretrain:
         print('Pretrain local models')
-        for client_idx in range(client_num):
-            for i in range(0, args.iters):
+        for client_idx in tqdm(range(client_num), desc='Pretrain clients'):
+            for i in tqdm(range(0, args.iters), desc=f'Pretrain client {client_idx}', leave=False):
                 loss, acc = train(client_models_pre[client_idx], train_loaders[client_idx], optimizers_pre[client_idx], classification_loss_fun, device)
                 test_loss, test_acc = test(client_models_pre[client_idx], test_loaders[client_idx], classification_loss_fun, device)
 
@@ -623,7 +628,7 @@ if __name__ == '__main__':
     if args.generate_image:
         print('Start distribution matching...')
 
-        for client_idx in range(client_num):
+        for client_idx in tqdm(range(client_num), desc='Distribution matching clients'):
             # organize the real dataset
             images_all = []
             labels_all = []
@@ -680,7 +685,7 @@ if __name__ == '__main__':
                 ))
                 # sys.exit()
             
-            for it in range(inv_iters):
+            for it in tqdm(range(inv_iters), desc=f'DM client {client_idx}', leave=False):
                 loss_avg = 0
                 if args.DP:
                     # get real images for each class
@@ -813,7 +818,7 @@ if __name__ == '__main__':
                     else:
                         model_path = f'{SAVE_PATH}/client{client_idx}_iterative_kd_{client_model_names[client_idx]}_model.pt'
                 client_models_kd[client_idx].load_state_dict(torch.load(model_path))
-        for i in range(args.kd_iters):
+        for i in tqdm(range(args.kd_iters), desc='KD rounds'):
             # get clients
             if args.client_ratio != 1.:
                 client_list = np.random.choice(np.arange(client_num), int(args.client_ratio*client_num), replace=False)
