@@ -43,6 +43,43 @@ python iterative_desab.py --dataset=cifar10c --ipc=50 --model_hetero=True --pret
 python iterative_desab.py --dataset=cifar10c --ipc=10 --model_hetero=True --pretrain=True --generate_image=True --KD=True --client_ratio=0.2
 ```
 
+## CIFAR10 5-agent 2-class baseline
+
+This repository also includes a minimal CIFAR-10 baseline setting:
+
+- `--dataset=cifar10-5x2`
+- 5 clients/agents
+- fixed class split:
+  - client 0: `[0, 1]`
+  - client 1: `[2, 3]`
+  - client 2: `[4, 5]`
+  - client 3: `[6, 7]`
+  - client 4: `[8, 9]`
+- labels stay as global CIFAR-10 labels `0-9`
+- model output dimension stays 10 classes
+- CIFAR-10 is downloaded automatically to `data/Raw`
+
+Local smoke test:
+
+```
+python iterative_desa.py --dataset=cifar10-5x2 --ipc=1 --batch=16 --kd_batch=16 --iters=1 --inv_iters=1 --kd_iters=1 --pretrain=True --generate_image=True --kd=True
+```
+
+AutoDL run:
+
+```
+python iterative_desa.py --dataset=cifar10-5x2 --ipc=10 --batch=32 --kd_batch=32 --iters=100 --inv_iters=1000 --kd_iters=100 --pretrain=True --generate_image=True --kd=True
+```
+
+Manual Git commands:
+
+```
+git status
+git add desa_data.py iterative_desa.py README.md
+git commit -m "Add CIFAR10 5x2 baseline"
+git push
+```
+
 ## DP experiments
 
 Currently, DeSA only supports DIGITS experiment.
