@@ -21,10 +21,23 @@ CIFAR10_5X2_CLASS_SPLIT = [
 ]
 
 
+class LabelTensorSubset(torch.utils.data.Dataset):
+    def __init__(self, dataset, indices):
+        self.dataset = dataset
+        self.indices = indices
+
+    def __getitem__(self, idx):
+        image, label = self.dataset[self.indices[idx]]
+        return image, torch.tensor(label, dtype=torch.long)
+
+    def __len__(self):
+        return len(self.indices)
+
+
 def _subset_by_classes(dataset, class_ids):
     class_ids = set(class_ids)
     indices = [idx for idx, target in enumerate(dataset.targets) if target in class_ids]
-    return torch.utils.data.Subset(dataset, indices)
+    return LabelTensorSubset(dataset, indices)
 
 
 def compute_img_mean_std(img_set, im_size):
