@@ -18,6 +18,7 @@ import torchvision.transforms as transforms
 from utils import get_network, get_time, TensorDataset
 from condensation import distribution_matching, distribution_matching_DP
 from torchvision.utils import save_image
+from torch.utils.data import WeightedRandomSampler
 import random
 from loss_fn import Distance_loss
 import pandas as pd
@@ -788,7 +789,26 @@ if __name__ == '__main__':
 
     # concatenated train sets
     concated_train_sets = [torch.utils.data.ConcatDataset([train_dataset, mixup_train_set]) for train_dataset in train_datasets]
-    concated_train_loaders = [torch.utils.data.DataLoader(concated_train_set, batch_size=args.kd_batch, shuffle=True, num_workers=0) for concated_train_set in concated_train_sets]
+    concated_train_samplers = []
+    for train_dataset, concated_train_set in zip(train_datasets, concated_train_sets):
+        real_len = len(train_dataset)
+        syn_len = len(mixup_train_set)
+        sample_weights = torch.cat((
+            torch.full((real_len,), 0.5 / real_len, dtype=torch.double),
+            torch.full((syn_len,), 0.5 / syn_len, dtype=torch.double),
+        ))
+        concated_train_samplers.append(
+            WeightedRandomSampler(sample_weights, num_samples=len(concated_train_set), replacement=True)
+        )
+    concated_train_loaders = [
+        torch.utils.data.DataLoader(
+            concated_train_set,
+            batch_size=args.kd_batch,
+            sampler=concated_train_sampler,
+            num_workers=0,
+        )
+        for concated_train_set, concated_train_sampler in zip(concated_train_sets, concated_train_samplers)
+    ]
 
     ''' Knowledge Distillation '''
     distance_loss = Distance_loss(device=args.device)
